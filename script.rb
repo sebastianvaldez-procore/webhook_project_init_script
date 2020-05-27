@@ -16,9 +16,13 @@ require 'logger'
 
 Dotenv.load # LOAD ID AND SECRET FROM .env file ( youll need to create this if cloned repo )
 
-# customer service account ( use client OAuth flow )
-client_id = ENV['CLIENT_ID']
-client_secret = ENV['CLIENT_SECRET']
+prompt = TTY::Prompt.new
+#Ask Script user for customer info 
+@customer_info = prompt.collect do
+    key(:company_id).ask('What is the Procore Company Id? ')
+    key(:client_id).ask('What is Client ID? ')
+    key(:client_secret).ask('What is Client Secret? ')
+end
 
 @login_url = 'https://login.procore.com/'
 @base_url = 'https://api.procore.com' # todo ask user for us02 api 
@@ -37,31 +41,33 @@ def procore_headers(company_id: nil, token: '')
     }
   end
 end
+
 begin
 
   # get access token
   client =  OAuth2::Client.new(
-    client_id,
-    client_secret,
+    @customer_info[:client_id],
+    @customer_info[:client_secret],
     site: @login_url
   )
-  @token = client.client_credentials.get_token({'grant_type': 'client_credentials'}).token
-
-  # list companys API - # ! a bug where we cannot get the company id from this endoint
-  # @company_id = HTTParty.get("#{@base_url}vapid/companies", headers: procore_headers(token: token))
-  @company_id = ENV['COMPANY_ID']
+  @customer_info[:token] = client.client_credentials.get_token({'grant_type': 'client_credentials'}).token
+  puts 'Succesfully Set client credential token'
 
   # get the company's projects
   def list_projects(company_id: )
     url = "#{@base_url}/vapid/projects?company_id=#{company_id}"
-    HTTParty.get(url, headers: procore_headers(token: @token, company_id: company_id )).parsed_response
+    HTTParty.get(url, headers: procore_headers(token: @customer_info[:token], company_id: @customer_info[:company_id] )).parsed_response
   end
   
   # filter out projects
-  projects = list_projects(company_id: @company_id).map{|project| project['id']}
+  puts 'Fetching projects'
+  projects = list_projects(company_id: @customer_info[:company_id]).map{|project| project['id']}
 
-  # define webhook url n # todo ask for this URL from tty-prompt
-  @webhook = 'https://www.workato.com/webhooks/rest/98125538-3c4f-4850-b593-f87d38072fb1/webhooks-project-events'
+  # todo  Add logic to filter for specific projects customer only wants integrations for.
+
+  # define webhook url n # todo ask for this URL from tty-prompt & add URL validation!
+  @webhook = prompt.ask('What is the URL for the webhook Procore should POST to? ')
+
   # create Hook 
   def create_project_hook(project_id: )
     url = "#{@base_url}/vapid/webhooks/hooks?project_id=#{project_id}"
@@ -76,7 +82,7 @@ begin
 
     res = HTTParty.post(
       url,
-      headers: procore_headers(token: @token, company_id: @company_id),
+      headers: procore_headers(token: @customer_info[:token], company_id: @customer_info[:company_id]),
       body: body.to_json)
     if res.code == 201
       res
@@ -95,7 +101,7 @@ begin
   # template trigger event array
   def create_trigger(hook_id:, project_id:, trigger_body:)
     url = "#{@base_url}/vapid/webhooks/hooks/#{hook_id}/triggers?project_id=#{project_id}"
-    res = HTTParty.post(url, body: trigger_body.to_json, headers: procore_headers(token: @token, company_id: @company_id) ) # returns HTTParty object {code, response}
+    res = HTTParty.post(url, body: trigger_body.to_json, headers: procore_headers(token: @customer_info[:token], company_id: @customer_info[:company_id]) ) # returns HTTParty object {code, response}
     if res.code == 201
       res
     else
@@ -190,7 +196,7 @@ projects_and_hooks.map do |project|
   end
 end
 
-File.open("company_id_#{@company_id}_#{Time.now.to_i}.json", 'w') do |file|
+File.open("company_id_#{@customer_info[:company_id]}_#{Time.now.to_i}.json", 'w') do |file|
   file.write(JSON.pretty_generate(log))
 end
 puts 'log file wrote.'
