@@ -77,24 +77,30 @@ begin
     res = HTTParty.post(
       url,
       headers: procore_headers(token: @token, company_id: @company_id),
-      body: body)
-
-    if res.code == 200
+      body: body.to_json)
+    if res.code == 201
       res
     else
       raise StandardError.new({message: 'Error Creating Hook', data: res})
     end
   end
   
+  projects_and_hooks = []
+  puts "Adding Webhooks to Projects"
   projects.map do |id|
-    binding.pry
-      res = create_project_hook(project_id: id)
+    res = create_project_hook(project_id: id)
+    projects_and_hooks << { project_id: id, hook_id: res["id"] }
   end
 
   # template trigger event array
-  def create_trigger(hook_id, project_id, namespace)
-    url= "/vapid/webhooks/hooks/#{hook_id}/triggers?project_id=#{project_id}&namespace=#{namespace}"
-    HTTParty.post(url , headers: procore_headers(@company_id) ) # returns HTTParty object {code, response}
+  def create_trigger(hook_id:, project_id:, trigger_body:)
+    url = "#{@base_url}/vapid/webhooks/hooks/#{hook_id}/triggers?project_id=#{project_id}"
+    res = HTTParty.post(url, body: trigger_body.to_json, headers: procore_headers(token: @token, company_id: @company_id) ) # returns HTTParty object {code, response}
+    if res.code == 201
+      res
+    else
+      raise StandardError.new({message: 'Error Creating Hook', data: res})
+    end    
   end
 
   # 10 current triggers
@@ -170,14 +176,24 @@ begin
       }
     }
   ]
+# iterate template of triggers, post w/ webhook id
+puts "Adding Triggers to projects"
+log = []
+projects_and_hooks.map do |project|
+  trigger_template.map do |trigger|
+    res = create_trigger(
+      hook_id: project[:hook_id],
+      project_id: project[:project_id],
+      trigger_body: trigger
+      )
+      log << res
+  end
+end
 
-  # get company's projects
-  list_projects = nil
-
-  # loop over projects
-    # for each project , post webook => returns webhook id
-    
-    # iterate template of triggers, post w/ webhook id
+File.open("company_id_#{@company_id}_#{Time.now.to_i}.json", 'w') do |file|
+  file.write(JSON.pretty_generate(log))
+end
+puts 'log file wrote.'
 
 rescue => e
   binding.pry
